@@ -1,0 +1,76 @@
+name: Update Stock Prices
+
+on:
+  schedule:
+    - cron: '30 7 * * 1-5'  # 每天週一到週五 15:30 台灣時間（UTC+8 = UTC 07:30）
+  workflow_dispatch:          # 也可以手動觸發
+
+jobs:
+  update-prices:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Fetch TWSE prices
+        run: |
+          curl -s "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_AVG_ALL" \
+            -H "User-Agent: Mozilla/5.0" \
+            -o twse_raw.json
+
+      - name: Fetch TPEx prices
+        run: |
+          curl -s "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes" \
+            -H "User-Agent: Mozilla/5.0" \
+            -o tpex_raw.json
+
+      - name: Build prices.json
+        run: |
+          python3 - <<'EOF'
+          import json, datetime
+
+          with open('twse_raw.json', 'r', encoding='utf-8') as f:
+              twse = json.load(f)
+          with open('tpex_raw.json', 'r', encoding='utf-8') as f:
+              tpex = json.load(f)
+
+          prices = {}
+          for s in twse:
+              code = s.get('Code', '').strip()
+              price = s.get('ClosingPrice', '0').replace(',', '')
+              try:
+                  if code and float(price) > 0:
+                      prices[code] = float(price)
+              except:
+                  pass
+
+          for s in tpex:
+              code = s.get('SecuritiesCompanyCode', '').strip()
+              price = s.get('Close', '0').replace(',', '')
+              try:
+                  if code and float(price) > 0:
+                      prices[code] = float(price)
+              except:
+                  pass
+
+          output = {
+              "updated": datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
+              "prices": prices
+          }
+
+          with open('prices.json', 'w', encoding='utf-8') as f:
+              json.dump(output, f, ensure_ascii=False)
+
+          print(f"Done: {len(prices)} stocks written to prices.json")
+          EOF
+
+      - name: Commit and push prices.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add prices.json
+          git diff --cached --quiet || git commit -m "Auto update prices $(date '+%Y-%m-%d')"
+          git push

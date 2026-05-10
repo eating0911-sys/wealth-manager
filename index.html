@@ -479,9 +479,7 @@ canvas { display: block; }
     <div class="nav-item" data-page="stocks" onclick="navigate('stocks')">
       <i data-lucide="trending-up"></i> 股票投資
     </div>
-    <div class="nav-item" data-page="funds" onclick="navigate('funds')">
-      <i data-lucide="bar-chart-3"></i> 基金 / ETF
-    </div>
+
     <div class="nav-section-label">規劃</div>
     <div class="nav-item" data-page="goals" onclick="navigate('goals')">
       <i data-lucide="target"></i> 儲蓄目標
@@ -671,15 +669,6 @@ canvas { display: block; }
           <option value="">不連結帳戶</option>
         </select>
       </div>
-      <div class="form-group">
-        <label class="form-label">從哪個帳戶扣款（選填）</label>
-        <select class="form-select" id="stkDeductAcc">
-          <option value="">不扣款</option>
-        </select>
-        <div style="font-size:var(--text-xs);color:var(--color-text-faint);margin-top:4px">
-          選擇後將自動扣除「股數 × 成本」並新增一筆交易記錄
-        </div>
-      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modalAddStock')">取消</button>
@@ -699,10 +688,7 @@ canvas { display: block; }
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">代號</label>
-          <div style="display:flex;gap:var(--space-2)">
-            <input class="form-input" id="fundCode" placeholder="例：0050" style="flex:1" />
-            <button class="btn btn-ghost" type="button" onclick="lookupFund()" style="flex-shrink:0">查詢</button>
-          </div>
+          <input class="form-input" id="fundCode" placeholder="例：0050" />
         </div>
         <div class="form-group">
           <label class="form-label">名稱</label>
@@ -1032,88 +1018,46 @@ function confirmDelete(fn, msg) {
 // ============================================================
 
 // ============================================================
-// PRICE ENGINE — 讀取 GitHub Actions 自動更新的 prices.json
+// TAIWAN STOCK LOOKUP
 // ============================================================
-let _priceCache = null;
-let _nameCache = {};
-
-async function loadPrices() {
-  if (_priceCache) return _priceCache;
-  try {
-    const res = await fetch('./prices.json', { signal: AbortSignal.timeout(8000) });
-    if (!res.ok) throw new Error('prices.json not found');
-    const data = await res.json();
-    _priceCache = data.prices || {};
-    _nameCache = data.names || {};
-    console.log('prices.json 載入成功，共', Object.keys(_priceCache).length, '支，更新時間：', data.updated);
-    return _priceCache;
-  } catch(e) {
-    console.warn('prices.json 載入失敗：', e.message);
-    return {};
-  }
-}
-
-async function fetchTWPrice(code) {
-  const prices = await loadPrices();
-  const price = prices[code] || 0;
-  if (price > 0) return price;
-  throw new Error('找不到 ' + code + ' 的報價');
-}
-
 async function lookupTwStock() {
   const code = document.getElementById('stkCode').value.trim();
   if (!code) return showToast('請先輸入股票代號', 'error');
   showToast('查詢中...', 'success');
   const keepOpen = () => document.getElementById('modalAddStock').classList.add('open');
   try {
-    const price = await fetchTWPrice(code);
-    const name = _nameCache[code] || '';
-    document.getElementById('stkPrice').value = price;
-    document.getElementById('stkMarket').value = '台股';
-    if (name) document.getElementById('stkName').value = name;
-    showToast('找到：' + (name || code) + '，收盤價 NT$ ' + price);
-    keepOpen();
-  } catch(e) {
-    showToast('查無此台股代號，或 prices.json 尚未產生', 'error');
-    keepOpen();
-  }
-}
-
-async function lookupFund() {
-  const code = document.getElementById('fundCode').value.trim();
-  if (!code) return showToast('請輸入代號', 'error');
-  showToast('查詢中…');
-  const keepOpen = () => document.getElementById('modalAddFund').classList.add('open');
-  try {
-    const price = await fetchTWPrice(code);
-    const name = _nameCache[code] || '';
-    document.getElementById('fundValue').value = price;
-    if (name && document.getElementById('fundName')) {
-      document.getElementById('fundName').value = name;
+    // Try TSE first
+    const res = await fetch(`/.netlify/functions/stock?type=tse&id=${code}`);
+    const data = await res.json();
+    if (data.msgArray && data.msgArray.length > 0) {
+      const stock = data.msgArray[0];
+      document.getElementById('stkName').value = stock.n || '';
+      const price = parseFloat(stock.z) || parseFloat(stock.y) || 0;
+      if (price > 0) document.getElementById('stkPrice').value = price;
+      document.getElementById('stkMarket').value = '台股';
+      showToast(`找到：${stock.n}，現價 NT$ ${price}`);
+      keepOpen();
+    } else {
+      // Try OTC
+      const res2 = await fetch(`/.netlify/functions/stock?type=otc&id=${code}`);
+      const data2 = await res2.json();
+      if (data2.msgArray && data2.msgArray.length > 0) {
+        const stock = data2.msgArray[0];
+        document.getElementById('stkName').value = stock.n || '';
+        const price = parseFloat(stock.z) || parseFloat(stock.y) || 0;
+        if (price > 0) document.getElementById('stkPrice').value = price;
+        document.getElementById('stkMarket').value = '台股';
+        showToast(`找到：${stock.n}，現價 NT$ ${price}`);
+        keepOpen();
+      } else {
+        showToast('找不到此股票，請確認代號或手動填入', 'error');
+        keepOpen();
+      }
     }
-    showToast('找到：' + (name || code) + '，收盤價 NT$ ' + price);
   } catch(e) {
-    showToast('查無資料，請手動輸入', 'error');
+    showToast('查詢失敗，請手動填入股價', 'error');
+    keepOpen();
   }
-  keepOpen();
-}
-
-async function refreshAllFundPrices() {
-  const btn = document.getElementById('refreshFundBtn');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<i data-lucide="loader-2" style="animation:spin 1s linear infinite"></i> 更新中…'; lucide.createIcons({ nodes: [btn] }); }
-  if (!document.getElementById('spinStyle')) { const s = document.createElement('style'); s.id = 'spinStyle'; s.textContent = '@keyframes spin{to{transform:rotate(360deg)}}'; document.head.appendChild(s); }
-  const today = new Date().toISOString().slice(0, 10);
-  const prices = await loadPrices();
-  let ok = 0, fail = 0, failList = [];
-  for (const fund of state.funds) {
-    if (!fund.code) continue;
-    const price = prices[fund.code] || 0;
-    if (price > 0) { fund.lastPrice = price; fund.lastUpdated = today; ok++; }
-    else { fail++; failList.push(fund.name || fund.code); }
-  }
-  saveState(); renderPage('funds');
-  if (fail === 0) showToast('✅ ' + ok + ' 支基金/ETF 報價已更新（' + today + '）');
-  else showToast('已更新 ' + ok + ' 支，' + fail + ' 支失敗（' + failList.join('、') + '）', 'error');
 }
 
 function saveState() {
@@ -1130,19 +1074,16 @@ function loadState() {
 }
 loadState();
 
-// Auto-save on page close / refresh
-window.addEventListener('beforeunload', () => { saveState(); });
-
 // ============================================================
 // NAVIGATION
 // ============================================================
 const pageTitles = {
   dashboard: '總覽', accounts: '銀行帳戶', transactions: '交易記錄',
-  stocks: '股票投資', funds: '基金 / ETF', goals: '儲蓄目標', pool: '共用錢包', reports: '報表分析', reconcile: '每月對帳'
+  stocks: '股票投資', goals: '儲蓄目標', pool: '共用錢包', reports: '報表分析', reconcile: '每月對帳'
 };
 const addBtnLabels = {
   dashboard: '新增交易', accounts: '新增帳戶', transactions: '新增交易',
-  stocks: '新增股票', funds: '新增基金', goals: '新增目標', pool: '新增錢包', reports: null, reconcile: null
+  stocks: '新增股票', goals: '新增目標', pool: '新增錢包', reports: null, reconcile: null
 };
 
 function navigate(page) {
@@ -1162,7 +1103,7 @@ function navigate(page) {
 
 function handleTopAdd() {
   const map = { dashboard: 'modalAddTx', accounts: 'modalAddAccount', transactions: 'modalAddTx',
-    stocks: 'modalAddStock', funds: 'modalAddFund', goals: 'modalAddGoal' };
+    stocks: 'modalAddStock', goals: 'modalAddGoal' };
   if (state.currentPage === 'pool') { openWalletModal(); return; }
   openModal(map[state.currentPage]);
 }
@@ -1173,7 +1114,7 @@ function handleTopAdd() {
 function renderPage(page) {
   const content = document.getElementById('pageContent');
   const renderers = { dashboard: renderDashboard, accounts: renderAccounts, transactions: renderTransactions,
-    stocks: renderStocks, funds: renderFunds, goals: renderGoals, pool: renderPool, reports: renderReports, reconcile: renderReconcile };
+    stocks: renderStocks,  goals: renderGoals, pool: renderPool, reports: renderReports, reconcile: renderReconcile };
   content.innerHTML = '';
   if (renderers[page]) renderers[page](content);
   lucide.createIcons();
@@ -1199,20 +1140,19 @@ function totalAssets() {
     const out = w.expenses.reduce((a,e)=>a+e.amount,0);
     return s + (inn - out);
   }, 0);
-  // Deduct wallet balances from linked accounts to avoid double-counting
+  // Deduct ALL wallet balances from total assets (wallet money is not personal assets)
   const walletDeduction = state.wallets.reduce((s, w) => {
-    if (!w.linkedAccountId) return s;
     const inn = w.contributions.reduce((a,c)=>a+c.amount,0);
     const out = w.expenses.reduce((a,e)=>a+e.amount,0);
-    return s + (inn - out);
+    return s + Math.max(0, inn - out);
   }, 0);
   const adjustedDepBalance = depBalance - walletDeduction;
-  return { depBalance, adjustedDepBalance, stockValue, fundValue, walletBalance, total: adjustedDepBalance + stockValue + fundValue };
+  return { depBalance: adjustedDepBalance, stockValue, fundValue, walletBalance, total: adjustedDepBalance };
 }
 
 // ---- DASHBOARD ----
 function renderDashboard(el) {
-  const { depBalance, adjustedDepBalance, stockValue, fundValue, walletBalance, total } = totalAssets();
+  const { depBalance, stockValue, fundValue, walletBalance, total } = totalAssets();
   const txIncome = state.transactions.filter(t => t.type === '收入').reduce((s, t) => s + t.amount, 0);
   const txExpense = state.transactions.filter(t => t.type === '支出').reduce((s, t) => s + t.amount, 0);
   const stockCost = state.stocks.reduce((s, st) => s + st.shares * st.cost * (st.market === '美股' ? 31 : 1), 0);
@@ -1241,17 +1181,17 @@ function renderDashboard(el) {
       <div class="kpi-card">
         <div class="kpi-label">總資產</div>
         <div class="kpi-value">NT$ ${fmt(total)}</div>
-        <div class="kpi-sub">含存款、股票、基金</div>
+        <div class="kpi-sub">個人存款（不含共用錢包及股票）</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">個人存款</div>
-        <div class="kpi-value">NT$ ${fmt(adjustedDepBalance)}</div>
-        <div class="kpi-sub">${state.accounts.length} 個帳戶（已扣共用錢包）</div>
+        <div class="kpi-value">NT$ ${fmt(depBalance)}</div>
+        <div class="kpi-sub">${state.accounts.length} 個帳戶</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">共用錢包結餘</div>
         <div class="kpi-value" style="color:var(--color-blue)">NT$ ${fmt(walletBalance)}</div>
-        <div class="kpi-sub">${state.wallets.length} 個錢包（已從存款中扣除）</div>
+        <div class="kpi-sub">${state.wallets.length} 個錢包（不計入總資產）</div>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">股票損益</div>
@@ -1378,18 +1318,34 @@ function renderAccounts(el) {
       `<table class="mobile-card-table">
         <thead><tr>
           <th>帳戶名稱</th><th>類型</th><th>貨幣</th>
-          <th class="text-right">餘額</th><th>備註</th><th></th>
+          <th class="text-right">餘額（含共用錢包）</th><th>備註</th><th></th>
         </tr></thead>
         <tbody>
-          ${state.accounts.map(a => `
-          <tr>
+          ${state.accounts.map(a => {
+            // Calculate wallet reserved amount for this account
+            const walletReserved = state.wallets
+              .filter(w => w.linkedAccountId === a.id)
+              .reduce((s, w) => {
+                const inn = w.contributions.reduce((x,c)=>x+c.amount,0);
+                const out = w.expenses.reduce((x,e)=>x+e.amount,0);
+                return s + Math.max(0, inn - out);
+              }, 0);
+            const availBal = a.balance - walletReserved;
+            return `<tr>
             <td><strong>${a.name}</strong></td>
             <td><span class="badge ${a.type === '活存' ? 'badge-green' : a.type === '定存' ? 'badge-blue' : a.type === '外幣' ? 'badge-gold' : a.type === '現金' ? 'badge-orange' : 'badge-orange'}">${a.type}</span></td>
             <td class="td-muted">${a.currency}</td>
-            <td class="td-mono text-right">${fmtCur(a.balance, a.currency)}</td>
+            <td class="td-mono text-right">
+              ${fmtCur(a.balance, a.currency)}
+              ${walletReserved > 0 ? `<div style="font-size:var(--text-xs);color:var(--color-text-muted);margin-top:2px">
+                <span style="color:var(--color-blue)">共用錢包佔用 -NT$ ${fmt(walletReserved)}</span><br>
+                <span style="color:var(--color-success);font-weight:600">可用 NT$ ${fmt(availBal)}</span>
+              </div>` : ''}
+            </td>
             <td class="td-muted">${a.note || '—'}</td>
             <td><button class="btn btn-ghost" style="padding:var(--space-1) var(--space-2);font-size:var(--text-xs)" onclick="confirmDelete(()=>deleteAccount(${a.id}),'確定要刪除這個帳戶嗎？')"><i data-lucide="trash-2" style="width:13px;height:13px"></i></button></td>
-          </tr>`).join('')}
+          </tr>`;
+          }).join('')}
         </tbody>
       </table>`}
     </div>`;
@@ -1563,7 +1519,6 @@ function renderStocks(el) {
                 style="cursor:pointer;border-bottom:1px dashed var(--color-primary);padding-bottom:1px">
                 ${s.market==='美股'?'US$':'NT$'} ${fmt(s.price)}
               </span>
-              ${s.lastUpdated ? `<div style="font-size:var(--text-xs);color:var(--color-text-faint);margin-top:2px">${s.lastUpdated}</div>` : ''}
             </td>
             <td data-label="市值" class="td-mono text-right">NT$ ${fmt(s.mv)}</td>
             <td data-label="損益" class="td-mono text-right" style="color:${s.gain>=0?'var(--color-success)':'var(--color-error)'}">
@@ -1621,10 +1576,7 @@ function renderFunds(el) {
     <div class="table-card">
       <div class="table-card-header">
         <span class="section-title">基金 / ETF 清單</span>
-        <div style="display:flex;gap:var(--space-2)">
-          <button class="btn btn-ghost" id="refreshFundBtn" onclick="refreshAllFundPrices()"><i data-lucide="refresh-cw"></i> 更新報價</button>
-          <button class="btn btn-primary" onclick="openModal('modalAddFund')"><i data-lucide="plus"></i> 新增基金</button>
-        </div>
+        <button class="btn btn-primary" onclick="openModal('modalAddFund')"><i data-lucide="plus"></i> 新增基金</button>
       </div>
       ${state.funds.length === 0 ? `<div class="empty-state"><h3>尚未持有基金</h3><p>新增您的基金投資</p></div>` :
       `<table class="mobile-card-table">
@@ -1645,7 +1597,6 @@ function renderFunds(el) {
                   style="cursor:pointer;border-bottom:1px dashed var(--color-primary);padding-bottom:1px">
                   NT$ ${fmt(f.value)}
                 </span>
-                ${f.lastUpdated ? `<div style="font-size:var(--text-xs);color:var(--color-text-faint);margin-top:2px">${f.lastUpdated}</div>` : ''}
               </td>
               <td class="td-mono text-right" style="color:${gain>=0?'var(--color-success)':'var(--color-error)'}">
                 ${sign(gain)}NT$ ${fmt(Math.abs(gain))}<br>
@@ -1696,78 +1647,159 @@ function renderGoals(el) {
 }
 
 // ---- REPORTS ----
+let reportMonth = new Date().toISOString().slice(0,7);
+let reportMonths = 6;
+
 function renderReports(el) {
+  // All available months
+  const allMonths = [...new Set(state.transactions.map(t => t.date.slice(0,7)))].sort();
+  if (!reportMonth || !allMonths.includes(reportMonth)) {
+    reportMonth = allMonths[allMonths.length-1] || new Date().toISOString().slice(0,7);
+  }
+
+  // Filter transactions for selected month
+  const monthTx = state.transactions.filter(t => t.date.startsWith(reportMonth));
   const incomeByCategory = {};
   const expenseByCategory = {};
-  state.transactions.forEach(t => {
-    if (t.type === '收入') incomeByCategory[t.category] = (incomeByCategory[t.category] || 0) + t.amount;
-    if (t.type === '支出') expenseByCategory[t.category] = (expenseByCategory[t.category] || 0) + t.amount;
+  monthTx.forEach(t => {
+    if (t.type === '收入') incomeByCategory[t.category] = (incomeByCategory[t.category]||0) + t.amount;
+    if (t.type === '支出') expenseByCategory[t.category] = (expenseByCategory[t.category]||0) + t.amount;
   });
+  const monthIncome = monthTx.filter(t=>t.type==='收入').reduce((s,t)=>s+t.amount,0);
+  const monthExpense = monthTx.filter(t=>t.type==='支出').reduce((s,t)=>s+t.amount,0);
 
-  const { depBalance, adjustedDepBalance, stockValue, fundValue, walletBalance, total } = totalAssets();
+  // Multi-month trend (last N months)
+  const trendMonths = allMonths.slice(-reportMonths);
+  const trendIncome = trendMonths.map(m => state.transactions.filter(t=>t.date.startsWith(m)&&t.type==='收入').reduce((s,t)=>s+t.amount,0));
+  const trendExpense = trendMonths.map(m => state.transactions.filter(t=>t.date.startsWith(m)&&t.type==='支出').reduce((s,t)=>s+t.amount,0));
+
+  const { depBalance, stockValue, total } = totalAssets();
 
   el.innerHTML = `
-    <div class="two-col">
-      <div class="chart-card">
-        <div class="section-title" style="margin-bottom:var(--space-3)">支出類別分析</div>
-        <canvas id="expChart" height="200"></canvas>
+    <!-- Month selector -->
+    <div style="display:flex;align-items:center;gap:var(--space-4);margin-bottom:var(--space-5);flex-wrap:wrap">
+      <div>
+        <div style="font-size:var(--text-xs);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-muted);margin-bottom:var(--space-2)">分析月份</div>
+        <input class="form-input" type="month" id="reportMonthPicker" value="${reportMonth}"
+          style="font-size:var(--text-base);font-weight:700;width:auto"
+          onchange="reportMonth=this.value;renderPage('reports')" />
       </div>
-      <div class="chart-card">
-        <div class="section-title" style="margin-bottom:var(--space-3)">資產結構</div>
-        <canvas id="assetChart" height="200"></canvas>
+      <div>
+        <div style="font-size:var(--text-xs);font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--color-text-muted);margin-bottom:var(--space-2)">趨勢區間</div>
+        <select class="form-select" style="width:auto" onchange="reportMonths=parseInt(this.value);renderPage('reports')">
+          <option value="3" ${reportMonths===3?'selected':''}>近 3 個月</option>
+          <option value="6" ${reportMonths===6?'selected':''}>近 6 個月</option>
+          <option value="12" ${reportMonths===12?'selected':''}>近 12 個月</option>
+        </select>
       </div>
     </div>
+
+    <!-- Monthly KPIs -->
+    <div class="kpi-grid" style="margin-bottom:var(--space-5)">
+      <div class="kpi-card">
+        <div class="kpi-label">${reportMonth} 收入</div>
+        <div class="kpi-value" style="color:var(--color-success)">NT$ ${fmt(monthIncome)}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">${reportMonth} 支出</div>
+        <div class="kpi-value" style="color:var(--color-error)">NT$ ${fmt(monthExpense)}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">${reportMonth} 結餘</div>
+        <div class="kpi-value" style="color:${monthIncome-monthExpense>=0?'var(--color-success)':'var(--color-error)'}">
+          ${monthIncome-monthExpense>=0?'+':''}NT$ ${fmt(monthIncome-monthExpense)}
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="two-col">
+      <div class="chart-card">
+        <div class="section-title" style="margin-bottom:var(--space-3)">${reportMonth} 支出類別</div>
+        ${Object.keys(expenseByCategory).length === 0
+          ? '<div class="empty-state" style="padding:var(--space-8)"><h3>本月無支出記錄</h3></div>'
+          : '<canvas id="expChart" height="200"></canvas>'}
+      </div>
+      <div class="chart-card">
+        <div class="section-title" style="margin-bottom:var(--space-3)">收支趨勢（近 ${reportMonths} 個月）</div>
+        ${trendMonths.length === 0
+          ? '<div class="empty-state" style="padding:var(--space-8)"><h3>尚無交易記錄</h3></div>'
+          : '<canvas id="trendChart" height="200"></canvas>'}
+      </div>
+    </div>
+
+    <!-- Asset overview -->
     <div class="table-card">
       <div class="table-card-header"><span class="section-title">資產總覽</span></div>
       <table class="mobile-card-table">
         <thead><tr><th>類別</th><th class="text-right">金額 (NT$)</th><th class="text-right">佔比</th></tr></thead>
         <tbody>
-          <tr><td>銀行存款</td><td class="td-mono text-right">${fmt(depBalance)}</td><td class="td-mono text-right">${(depBalance/total*100).toFixed(1)}%</td></tr>
-          <tr><td>股票市值</td><td class="td-mono text-right">${fmt(stockValue)}</td><td class="td-mono text-right">${(stockValue/total*100).toFixed(1)}%</td></tr>
-          <tr><td>基金市值</td><td class="td-mono text-right">${fmt(fundValue)}</td><td class="td-mono text-right">${(fundValue/total*100).toFixed(1)}%</td></tr>
+          <tr><td>銀行存款</td><td class="td-mono text-right">${fmt(depBalance)}</td><td class="td-mono text-right">${total?((depBalance/total)*100).toFixed(1):0}%</td></tr>
+          <tr><td>股票市值</td><td class="td-mono text-right">${fmt(stockValue)}</td><td class="td-mono text-right">${total?((stockValue/total)*100).toFixed(1):0}%</td></tr>
           <tr style="font-weight:700"><td>合計</td><td class="td-mono text-right">${fmt(total)}</td><td class="td-mono text-right">100%</td></tr>
         </tbody>
       </table>
-    </div>`;
+    </div>
 
-  // Expense pie
-  const expColors = ['#ffb3ba','#ffdfba','#ffffba','#baffc9','#bae1ff','#e8baff','#ffd6e7','#c9f0ff','#d4f0c0','#fce4b8','#f7c6e8','#c6e8f7','#e8f7c6','#f7e8c6','#c6c6f7'];
-  const expTotal = Object.values(expenseByCategory).reduce((a,b)=>a+b,0);
-  new Chart(document.getElementById('expChart').getContext('2d'), {
-    type: 'pie',
-    plugins: [ChartDataLabels],
-    data: {
-      labels: Object.keys(expenseByCategory),
-      datasets: [{ data: Object.values(expenseByCategory), backgroundColor: expColors, borderWidth: 0 }]
-    },
-    options: {
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: { label: ctx => ` NT$ ${fmt(ctx.raw)}` } },
-        datalabels: {
-          display: ctx => expTotal > 0 && (ctx.dataset.data[ctx.dataIndex] / expTotal * 100) >= 3,
-          color: '#555',
-          font: { size: 11, weight: '600', family: "'Noto Sans TC'" },
-          formatter: (val, ctx) => {
-            const cat = Object.keys(expenseByCategory)[ctx.dataIndex];
-            return (catEmoji[cat]||'') + cat + '\n' + fmt(val);
-          },
-          textAlign: 'center',
-        }
+    <!-- Monthly expense breakdown table -->
+    ${Object.keys(expenseByCategory).length > 0 ? `
+    <div class="table-card">
+      <div class="table-card-header"><span class="section-title">${reportMonth} 支出明細</span></div>
+      <table class="mobile-card-table">
+        <thead><tr><th>類別</th><th class="text-right">金額</th><th class="text-right">佔比</th></tr></thead>
+        <tbody>
+          ${Object.entries(expenseByCategory).sort((a,b)=>b[1]-a[1]).map(([cat,amt])=>`
+          <tr>
+            <td>${catEmoji[cat]||''} ${cat}</td>
+            <td class="td-mono text-right">NT$ ${fmt(amt)}</td>
+            <td class="td-mono text-right td-muted">${monthExpense?(amt/monthExpense*100).toFixed(1):0}%</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+  `;
+
+  // Expense pie chart
+  if (Object.keys(expenseByCategory).length > 0) {
+    const expColors = ['#ffb3ba','#ffdfba','#ffffba','#baffc9','#bae1ff','#e8baff','#ffd6e7','#c9f0ff','#d4f0c0','#fce4b8','#f7c6e8','#c6e8f7','#e8f7c6','#f7e8c6','#c6c6f7'];
+    const expTotal = Object.values(expenseByCategory).reduce((a,b)=>a+b,0);
+    new Chart(document.getElementById('expChart').getContext('2d'), {
+      type: 'pie', plugins: [ChartDataLabels],
+      data: { labels: Object.keys(expenseByCategory), datasets: [{ data: Object.values(expenseByCategory), backgroundColor: expColors, borderWidth: 0 }] },
+      options: {
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: ctx => ` NT$ ${fmt(ctx.raw)}` } },
+          datalabels: {
+            display: ctx => expTotal > 0 && (ctx.dataset.data[ctx.dataIndex]/expTotal*100) >= 3,
+            color: '#555', font: { size: 11, weight: '600', family: "'Noto Sans TC'" },
+            formatter: (val, ctx) => { const cat = Object.keys(expenseByCategory)[ctx.dataIndex]; return (catEmoji[cat]||'')+cat+'\n'+fmt(val); },
+            textAlign: 'center'
+          }
+        }, animation: { duration: 700 }
+      }
+    });
+  }
+
+  // Trend bar chart
+  if (trendMonths.length > 0) {
+    new Chart(document.getElementById('trendChart').getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: trendMonths.map(m => m.slice(5)+'月'),
+        datasets: [
+          { label: '收入', data: trendIncome, backgroundColor: '#baffc9', borderRadius: 4 },
+          { label: '支出', data: trendExpense, backgroundColor: '#ffb3ba', borderRadius: 4 }
+        ]
       },
-      animation: { duration: 700 }
-    }
-  });
-
-  // Asset pie
-  new Chart(document.getElementById('assetChart').getContext('2d'), {
-    type: 'doughnut',
-    data: {
-      labels: ['存款','股票','基金'],
-      datasets: [{ data: [depBalance, stockValue, fundValue], backgroundColor: ['#ffb3ba','#bae1ff','#ffffba'], borderWidth: 0 }]
-    },
-    options: { cutout: '60%', plugins: { tooltip: { callbacks: { label: ctx => ` NT$ ${fmt(ctx.raw)}` } } }, animation: { duration: 700 } }
-  });
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => ` NT$ ${fmt(ctx.raw)}` } }, datalabels: { display: false } },
+        scales: { y: { ticks: { callback: v => 'NT$'+fmt(v) } } },
+        animation: { duration: 700 }
+      }
+    });
+  }
 }
 
 // ============================================================
@@ -1842,71 +1874,35 @@ function addTransaction() {
   showToast('交易已新增');
 }
 function deleteTx(id) {
+  const tx = state.transactions.find(t => t.id === id);
+  if (!tx) return;
+  if (!confirm('確定要刪除這筆交易？此操作將同步調整帳戶餘額。')) return;
+  // Reverse balance effect
+  const acc = state.accounts.find(a => a.id === tx.accountId);
+  if (acc) {
+    if (tx.type === '收入') acc.balance -= tx.amount;
+    else if (tx.type === '支出') acc.balance += tx.amount;
+  }
   state.transactions = state.transactions.filter(t => t.id !== id);
-  renderPage(state.currentPage); showToast('交易已刪除');
+  saveState(); renderPage(state.currentPage); showToast('交易已刪除，帳戶餘額已同步調整');
 }
 
 function populateStkLinkedAcc() {
   const sel = document.getElementById('stkLinkedAcc');
   if (!sel) return;
   sel.innerHTML = '<option value="">不連結帳戶</option>' +
-    state.accounts.map(a => `<option value="${a.id}">${a.name}（NT$ ${fmt(a.balance)}）</option>`).join('');
-
-  const deduct = document.getElementById('stkDeductAcc');
-  if (!deduct) return;
-  deduct.innerHTML = '<option value="">不扣款</option>' +
-    state.accounts.map(a => `<option value="${a.id}">${a.name}（NT$ ${fmt(a.balance)}）</option>`).join('');
+    state.accounts.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
 }
-
 function addStock() {
   const code = document.getElementById('stkCode').value.trim();
   const name = document.getElementById('stkName').value.trim();
   const shares = parseFloat(document.getElementById('stkShares').value) || 0;
   const cost = parseFloat(document.getElementById('stkCost').value) || 0;
   const price = parseFloat(document.getElementById('stkPrice').value) || 0;
-  const market = document.getElementById('stkMarket').value;
   const linkedAccountId = parseInt(document.getElementById('stkLinkedAcc').value) || null;
-  const deductAccId = parseInt(document.getElementById('stkDeductAcc').value) || null;
-
   if (!code || !name) return showToast('請填入代號和名稱', 'error');
-
-  // 計算扣款金額：股數 × 成本
-  const deductAmount = shares * cost;
-
-  // 如果選了扣款帳戶，先確認餘額是否足夠
-  if (deductAccId && deductAmount > 0) {
-    const acc = state.accounts.find(a => a.id === deductAccId);
-    if (!acc) return showToast('找不到扣款帳戶', 'error');
-    if (acc.balance < deductAmount) {
-      return showToast(`帳戶餘額不足（需 NT$ ${fmt(deductAmount)}，現有 NT$ ${fmt(acc.balance)}）`, 'error');
-    }
-  }
-
-  // 新增股票
-  state.stocks.push({ id: state.nextId++, code, name, shares, cost, price, market, linkedAccountId });
-
-  // 自動扣款 + 新增交易記錄
-  if (deductAccId && deductAmount > 0) {
-    const acc = state.accounts.find(a => a.id === deductAccId);
-    acc.balance -= deductAmount;
-    const today = new Date().toISOString().slice(0, 10);
-    state.transactions.push({
-      id: state.nextId++,
-      date: today,
-      type: '支出',
-      category: '投資',
-      desc: '買入 ' + name + '（' + code + '）× ' + shares + ' 股',
-      amount: deductAmount,
-      accountId: deductAccId
-    });
-    showToast('已新增股票，並從「' + acc.name + '」扣除 NT$ ' + fmt(deductAmount));
-  } else {
-    showToast('股票已新增');
-  }
-
-  closeModal('modalAddStock');
-  saveState();
-  renderPage(state.currentPage);
+  state.stocks.push({ id: state.nextId++, code, name, shares, cost, price, market: document.getElementById('stkMarket').value, linkedAccountId });
+  closeModal('modalAddStock'); saveState(); renderPage(state.currentPage); showToast('股票已新增');
 }
 
 
@@ -2025,6 +2021,9 @@ function confirmStockTrade() {
   showToast(type === '買入' ? '買入成功！已更新持股與帳戶' : '賣出成功！已更新持股與帳戶');
 }
 function deleteStock(id) {
+  const stk = state.stocks.find(s => s.id === id);
+  if (!stk) return;
+  if (!confirm(`確定要刪除「${stk.name}」？若有連結帳戶，將不會自動調整帳戶餘額（請手動記錄出售交易）。`)) return;
   state.stocks = state.stocks.filter(s => s.id !== id);
   saveState(); renderPage(state.currentPage); showToast('股票已刪除');
 }
@@ -2063,13 +2062,9 @@ function deleteGoal(id) {
 // MODAL / TOAST / THEME / SIDEBAR
 // ============================================================
 function openModal(id) {
-  const modalEl = document.getElementById(id);
-  modalEl.querySelectorAll('input:not([type=hidden]), textarea').forEach(el => el.value = '');
-  modalEl.querySelectorAll('select').forEach(el => el.selectedIndex = 0);
   if (id === 'modalAddTx') populateTxAccountSelect();
   if (id === 'modalAddStock') populateStkLinkedAcc();
-  modalEl.classList.add('open');
-  lucide.createIcons();
+  document.getElementById(id).classList.add('open');
 }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 document.querySelectorAll('.modal-overlay').forEach(m => {
@@ -2463,24 +2458,42 @@ async function refreshAllPrices() {
   btn.disabled = true;
   btn.innerHTML = '<i data-lucide="loader-2" style="animation:spin 1s linear infinite"></i> 更新中…';
   lucide.createIcons({ nodes: [btn] });
-  if (!document.getElementById('spinStyle')) { const s = document.createElement('style'); s.id = 'spinStyle'; s.textContent = '@keyframes spin{to{transform:rotate(360deg)}}'; document.head.appendChild(s); }
-  const today = new Date().toISOString().slice(0, 10);
-  _priceCache = null; // 強制重新讀取最新 prices.json
-  const prices = await loadPrices();
+
+  // Add spin keyframe if not exists
+  if (!document.getElementById('spinStyle')) {
+    const s = document.createElement('style');
+    s.id = 'spinStyle';
+    s.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+    document.head.appendChild(s);
+  }
+
   let success = 0, fail = 0, failList = [];
+
   for (const stock of state.stocks) {
-    if (stock.market === '台股') {
-      const price = prices[stock.code] || 0;
-      if (price > 0) { stock.price = price; stock.lastUpdated = today; success++; }
-      else { fail++; failList.push(stock.name || stock.code); }
-    } else {
-      fail++; failList.push((stock.name || stock.code) + '(非台股)');
+    // Map to Yahoo symbol: 台股 append .TW, others as-is
+    let symbol = stock.code;
+    if (stock.market === '台股') symbol = stock.code + '.TW';
+    else if (stock.market === '港股') symbol = stock.code + '.HK';
+
+    try {
+      const price = await fetchYahooPrice(symbol);
+      stock.price = Math.round(price * 100) / 100;
+      success++;
+    } catch(e) {
+      fail++;
+      failList.push(stock.name);
     }
   }
-  saveState(); renderPage('stocks');
-  if (fail === 0) showToast('✅ ' + success + ' 支台股報價已更新（' + today + '）');
-  else if (success > 0) showToast('已更新 ' + success + ' 支，' + fail + ' 支需手動更新', 'error');
-  else showToast('無法更新，請確認 prices.json 是否存在', 'error');
+
+  renderPage('stocks');
+
+  if (fail === 0) {
+    showToast(`✅ ${success} 支股票報價已更新`);
+  } else if (success > 0) {
+    showToast(`已更新 ${success} 支，${fail} 支失敗（${failList.join('、')}）`, 'error');
+  } else {
+    showToast('更新失敗，請稍後再試或手動點擊現價輸入', 'error');
+  }
 }
 
 
